@@ -19,7 +19,6 @@ import android.telephony.CellSignalStrengthLte
 import android.telephony.CellSignalStrengthNr
 import android.telephony.ServiceState
 import android.telephony.SubscriptionManager
-import android.telephony.TelephonyDisplayInfo
 import android.telephony.TelephonyManager
 
 object CellularCollector {
@@ -107,18 +106,11 @@ object CellularCollector {
     private fun operator(tm: TelephonyManager?, phoneGranted: Boolean): OperatorInfo {
         if (tm == null) return OperatorInfo(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null)
         val ss = if (phoneGranted) runCatching { tm.serviceState }.getOrNull() else null
-        val display = if (phoneGranted && Build.VERSION.SDK_INT >= 30) {
-            runCatching { tm.telephonyDisplayInfo }.getOrNull()
-        } else null
+        val override = if (phoneGranted) readDisplayOverride(tm) else null
         val dataType = if (phoneGranted) runCatching { tm.dataNetworkType }.getOrNull() else null
         val voiceType = if (phoneGranted) runCatching { tm.voiceNetworkType }.getOrNull() else null
-        val override = display?.let { overrideName(it.overrideNetworkType) }
         val generation = generationOf(dataType, override, ss)
-        val ca = if (Build.VERSION.SDK_INT >= 31) {
-            runCatching { ss?.isUsingCarrierAggregation }.getOrNull()
-        } else {
-            override?.contains("CA") == true
-        }
+        val ca = readCarrierAggregation(ss) ?: override?.contains("CA")
         return OperatorInfo(
             networkOperatorName = tm.networkOperatorName?.takeIf { it.isNotBlank() },
             simOperatorName = tm.simOperatorName?.takeIf { it.isNotBlank() },
@@ -153,36 +145,59 @@ object CellularCollector {
         }
     }
 
+    private fun readDisplayOverride(tm: TelephonyManager): String? {
+        if (Build.VERSION.SDK_INT < 30) return null
+        val type = runCatching {
+            val display = tm.javaClass.getMethod("getTelephonyDisplayInfo").invoke(tm)
+            display.javaClass.getMethod("getOverrideNetworkType").invoke(display) as Int
+        }.getOrNull() ?: return null
+        return overrideName(type)
+    }
+
+    private fun readCarrierAggregation(ss: ServiceState?): Boolean? {
+        if (ss == null || Build.VERSION.SDK_INT < 31) return null
+        return runCatching {
+            ss.javaClass.getMethod("isUsingCarrierAggregation").invoke(ss) as Boolean
+        }.getOrNull()
+    }
+
     private fun overrideName(type: Int): String? {
         if (Build.VERSION.SDK_INT < 30) return null
         return when (type) {
-            TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NONE -> null
-            TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_LTE_CA -> "LTE CA"
-            TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_LTE_ADVANCED_PRO -> "LTE Advanced Pro"
-            TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA -> "5G NSA"
-            TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_ADVANCED -> "5G SA / Advanced"
+            0 -> null // NONE
+            1 -> "LTE CA"
+            2 -> "LTE Advanced Pro"
+            3 -> "5G NSA"
+            4 -> "5G NSA mmWave"
+            5 -> "5G SA / Advanced"
             else -> "override $type"
         }
     }
 
     private fun nrStateName(ss: ServiceState?): String? {
         if (ss == null || Build.VERSION.SDK_INT < 29) return null
-        return when (ss.nrState) {
-            ServiceState.NR_STATE_NONE -> "无 5G"
-            ServiceState.NR_STATE_RESTRICTED -> "5G 受限"
-            ServiceState.NR_STATE_NOT_RESTRICTED -> "5G 可连接"
-            ServiceState.NR_STATE_CONNECTED -> "5G 已连接"
+        val state = runCatching {
+            ss.javaClass.getMethod("getNrState").invoke(ss) as Int
+        }.getOrNull() ?: return null
+        return when (state) {
+            0 -> "无 5G"
+            1 -> "5G 受限"
+            2 -> "5G 可连接"
+            3 -> "5G 已连接"
             else -> null
         }
     }
 
     private fun nrRangeName(ss: ServiceState?): String? {
         if (ss == null || Build.VERSION.SDK_INT < 29) return null
-        return when (ss.nrFrequencyRange) {
-            ServiceState.FREQUENCY_RANGE_LOW -> "FR1 低频"
-            ServiceState.FREQUENCY_RANGE_MID -> "FR1 中频"
-            ServiceState.FREQUENCY_RANGE_HIGH -> "FR1 高频"
-            ServiceState.FREQUENCY_RANGE_MMWAVE -> "FR2 毫米波"
+        val range = runCatching {
+            ss.javaClass.getMethod("getNrFrequencyRange").invoke(ss) as Int
+        }.getOrNull() ?: return null
+        return when (range) {
+            1 -> "FR1 低频"
+            2 -> "FR1 中频"
+            3 -> "FR1 高频"
+            4 -> "FR2 毫米波"
             else -> null
         }
     }
@@ -239,7 +254,12 @@ object CellularCollector {
         put(radio, "dBm", ss.dbm.avail())
         put(radio, "ASU", ss.asuLevel.takeIf { it >= 0 })
         put(radio, "电平", ss.level.takeIf { it >= 0 })
-        if (Build.VERSION.SDK_INT >= 34) put(radio, "TA", ss.timingAdvance.avail())
+        if (Build.VERSION.SDK_INT >= 34) {
+            runCatching {
+                val ta = ss.javaClass.getMethod("getTimingAdvance").invoke(ss) as Int
+                put(radio, "TA", ta.avail())
+            }
+        }
         return CellRecord(
             rat = "LTE",
             registered = info.isRegistered,

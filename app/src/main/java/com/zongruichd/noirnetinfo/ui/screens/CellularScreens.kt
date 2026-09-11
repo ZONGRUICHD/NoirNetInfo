@@ -368,7 +368,7 @@ private fun ShizukuLockCard(
                 result,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 20.dp, bottom = 16.dp),
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 16.dp),
             )
         }
     }

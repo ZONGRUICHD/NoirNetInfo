@@ -1,6 +1,6 @@
 package com.zongruichd.noirnetinfo.shizuku
 
-import android.annotation.Keep
+import androidx.annotation.Keep
 import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Build
