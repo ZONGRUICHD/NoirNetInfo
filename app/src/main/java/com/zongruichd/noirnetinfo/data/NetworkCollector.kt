@@ -284,6 +284,7 @@ object NetworkCollector {
     }
 
     private fun addressesFrom(lp: LinkProperties?, ifaces: List<IfaceDetails>): List<IpEntry> {
+        val ifaceName = lp?.interfaceName.orEmpty()
         val fromLink = lp?.linkAddresses.orEmpty().mapNotNull { la ->
             val inet = la.address ?: return@mapNotNull null
             if (inet.isLoopbackAddress) return@mapNotNull null
@@ -294,7 +295,7 @@ object NetworkCollector {
                 cidr = "$host/${la.prefixLength}",
                 version = if (inet is Inet4Address) IpVersion.V4 else IpVersion.V6,
                 scope = scopeOf(inet),
-                iface = lp.interfaceName ?: "",
+                iface = ifaceName,
             )
         }
         if (fromLink.isNotEmpty()) {
