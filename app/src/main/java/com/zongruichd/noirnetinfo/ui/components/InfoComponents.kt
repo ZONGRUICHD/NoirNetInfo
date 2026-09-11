@@ -97,3 +97,22 @@ fun CopyableRow(
         )
     }
 }
+
+@Composable
+fun CopyableMap(
+    values: Map<String, String>,
+    onCopy: (String) -> Unit,
+) {
+    val entries = values.entries.toList()
+    if (entries.isEmpty()) {
+        CopyableRow("参数", null, onCopy, placeholder = "无可用参数", showDivider = false)
+        return
+    }
+    entries.forEachIndexed { index, (key, value) ->
+        CopyableRow(key, value, onCopy, showDivider = index != entries.lastIndex)
+    }
+}
+
+fun yesNo(value: Boolean?): String? = value?.let { if (it) "是" else "否" }
+fun onOff(value: Boolean?): String? = value?.let { if (it) "开启" else "关闭" }
+

@@ -10,8 +10,6 @@ import android.net.NetworkCapabilities
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Build
-import android.telephony.SubscriptionManager
-import android.telephony.TelephonyManager
 import androidx.core.content.ContextCompat
 import java.net.Inet4Address
 import java.net.Inet6Address
@@ -39,8 +37,7 @@ object NetworkCollector {
         } else {
             null
         }
-        val cellular = cellular(app, phoneGranted)
-        val sims = sims(app, phoneGranted)
+        val (cellular, slots) = CellularCollector.collect(app, phoneGranted, locationGranted)
 
         return NetworkSnapshot(
             collectedAtMillis = System.currentTimeMillis(),
@@ -48,7 +45,7 @@ object NetworkCollector {
             addresses = addresses,
             wifi = wifi,
             cellular = cellular,
-            sims = sims,
+            slots = slots,
             interfaces = interfaces,
             locationGranted = locationGranted,
             phoneGranted = phoneGranted,
@@ -195,71 +192,6 @@ object NetworkCollector {
         }
     }
 
-    @SuppressLint("MissingPermission")
-    private fun cellular(context: Context, phoneGranted: Boolean): CellularDetails? {
-        val tm = context.getSystemService(TelephonyManager::class.java) ?: return null
-        val operatorName = tm.networkOperatorName?.takeIf { it.isNotBlank() }
-            ?: tm.simOperatorName?.takeIf { it.isNotBlank() }
-        val numeric = tm.networkOperator?.takeIf { it.isNotBlank() }
-            ?: tm.simOperator?.takeIf { it.isNotBlank() }
-        if (operatorName == null && numeric == null && tm.simState == TelephonyManager.SIM_STATE_ABSENT) {
-            return CellularDetails(
-                operatorName = null,
-                operatorNumeric = null,
-                networkType = null,
-                dataEnabled = runCatching { tm.isDataEnabled }.getOrNull(),
-                roaming = runCatching { tm.isNetworkRoaming }.getOrNull(),
-                phoneType = phoneType(tm.phoneType),
-            )
-        }
-        val networkType = if (phoneGranted) {
-            runCatching {
-                if (Build.VERSION.SDK_INT >= 24) networkTypeName(tm.dataNetworkType) else null
-            }.getOrNull()
-        } else {
-            null
-        }
-        return CellularDetails(
-            operatorName = operatorName,
-            operatorNumeric = numeric,
-            networkType = networkType,
-            dataEnabled = runCatching { tm.isDataEnabled }.getOrNull(),
-            roaming = runCatching { tm.isNetworkRoaming }.getOrNull(),
-            phoneType = phoneType(tm.phoneType),
-        )
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun sims(context: Context, phoneGranted: Boolean): List<SimDetails> {
-        if (!phoneGranted) return emptyList()
-        val sm = context.getSystemService(SubscriptionManager::class.java) ?: return emptyList()
-        val tm = context.getSystemService(TelephonyManager::class.java) ?: return emptyList()
-        val subs = runCatching { sm.activeSubscriptionInfoList }.getOrNull().orEmpty()
-        if (subs.isEmpty()) return emptyList()
-        return subs.map { info ->
-            val subTm = runCatching { tm.createForSubscriptionId(info.subscriptionId) }.getOrNull()
-            val mcc = if (Build.VERSION.SDK_INT >= 29) info.mccString else @Suppress("DEPRECATION") info.mcc.takeIf { it != 0 }?.toString()
-            val mnc = if (Build.VERSION.SDK_INT >= 29) info.mncString else @Suppress("DEPRECATION") info.mnc.takeIf { it != 0 }?.toString()
-            SimDetails(
-                slotIndex = info.simSlotIndex,
-                subscriptionId = info.subscriptionId,
-                displayName = info.displayName?.toString()?.takeIf { it.isNotBlank() },
-                carrierName = info.carrierName?.toString()?.takeIf { it.isNotBlank() },
-                mcc = mcc,
-                mnc = mnc,
-                countryIso = info.countryIso?.takeIf { it.isNotBlank() },
-                number = info.number?.takeIf { it.isNotBlank() },
-                embedded = if (Build.VERSION.SDK_INT >= 28) info.isEmbedded else null,
-                simState = simState(subTm?.simState ?: tm.simState),
-                networkOperator = subTm?.networkOperatorName?.takeIf { it.isNotBlank() },
-                networkType = subTm?.let {
-                    runCatching { networkTypeName(it.dataNetworkType) }.getOrNull()
-                },
-                roaming = runCatching { subTm?.isNetworkRoaming }.getOrNull(),
-            )
-        }.sortedBy { it.slotIndex }
-    }
-
     private fun interfaces(): List<IfaceDetails> {
         val list = runCatching { NetworkInterface.getNetworkInterfaces()?.toList() }
             .getOrNull()
@@ -375,51 +307,6 @@ object NetworkCollector {
                 else -> IpScope.GLOBAL
             }
         }
-    }
-
-    private fun phoneType(type: Int): String = when (type) {
-        TelephonyManager.PHONE_TYPE_GSM -> "GSM"
-        TelephonyManager.PHONE_TYPE_CDMA -> "CDMA"
-        TelephonyManager.PHONE_TYPE_SIP -> "SIP"
-        TelephonyManager.PHONE_TYPE_NONE -> "无"
-        else -> "未知"
-    }
-
-    private fun simState(state: Int): String = when (state) {
-        TelephonyManager.SIM_STATE_ABSENT -> "未插入"
-        TelephonyManager.SIM_STATE_PIN_REQUIRED -> "需要 PIN"
-        TelephonyManager.SIM_STATE_PUK_REQUIRED -> "需要 PUK"
-        TelephonyManager.SIM_STATE_NETWORK_LOCKED -> "网络锁定"
-        TelephonyManager.SIM_STATE_READY -> "就绪"
-        TelephonyManager.SIM_STATE_NOT_READY -> "未就绪"
-        TelephonyManager.SIM_STATE_PERM_DISABLED -> "永久禁用"
-        TelephonyManager.SIM_STATE_CARD_IO_ERROR -> "读卡错误"
-        TelephonyManager.SIM_STATE_CARD_RESTRICTED -> "受限"
-        else -> "未知"
-    }
-
-    private fun networkTypeName(type: Int): String = when (type) {
-        TelephonyManager.NETWORK_TYPE_GPRS -> "GPRS"
-        TelephonyManager.NETWORK_TYPE_EDGE -> "EDGE"
-        TelephonyManager.NETWORK_TYPE_UMTS -> "UMTS"
-        TelephonyManager.NETWORK_TYPE_CDMA -> "CDMA"
-        TelephonyManager.NETWORK_TYPE_EVDO_0 -> "EVDO 0"
-        TelephonyManager.NETWORK_TYPE_EVDO_A -> "EVDO A"
-        TelephonyManager.NETWORK_TYPE_EVDO_B -> "EVDO B"
-        TelephonyManager.NETWORK_TYPE_1xRTT -> "1xRTT"
-        TelephonyManager.NETWORK_TYPE_HSDPA -> "HSDPA"
-        TelephonyManager.NETWORK_TYPE_HSUPA -> "HSUPA"
-        TelephonyManager.NETWORK_TYPE_HSPA -> "HSPA"
-        TelephonyManager.NETWORK_TYPE_HSPAP -> "HSPA+"
-        TelephonyManager.NETWORK_TYPE_IDEN -> "iDEN"
-        TelephonyManager.NETWORK_TYPE_LTE -> "LTE"
-        TelephonyManager.NETWORK_TYPE_EHRPD -> "eHRPD"
-        TelephonyManager.NETWORK_TYPE_GSM -> "GSM"
-        TelephonyManager.NETWORK_TYPE_TD_SCDMA -> "TD-SCDMA"
-        TelephonyManager.NETWORK_TYPE_IWLAN -> "IWLAN"
-        TelephonyManager.NETWORK_TYPE_NR -> "5G NR"
-        TelephonyManager.NETWORK_TYPE_UNKNOWN -> "未知"
-        else -> "类型 $type"
     }
 
 }

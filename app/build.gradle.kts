@@ -12,8 +12,8 @@ android {
         applicationId = "com.zongruichd.noirnetinfo"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
     }
 
     buildTypes {
@@ -39,6 +39,7 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        aidl = true
     }
 
     packaging {
@@ -59,5 +60,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.extended)
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
