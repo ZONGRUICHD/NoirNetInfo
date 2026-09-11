@@ -5,12 +5,15 @@ import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.zongruichd.noirnetinfo.BuildConfig
 import com.zongruichd.noirnetinfo.data.CellularCollector
 import com.zongruichd.noirnetinfo.data.NetworkCollector
 import com.zongruichd.noirnetinfo.data.NetworkSnapshot
 import com.zongruichd.noirnetinfo.data.PublicIpClient
+import com.zongruichd.noirnetinfo.data.UpdateClient
 import com.zongruichd.noirnetinfo.shizuku.ShizukuController
 import com.zongruichd.noirnetinfo.shizuku.ShizukuUiState
 import kotlinx.coroutines.Dispatchers
@@ -29,12 +32,29 @@ data class HomeUiState(
     val refreshing: Boolean = false,
 )
 
+data class UpdateUiState(
+    val checking: Boolean = false,
+    val downloading: Boolean = false,
+    val progress: Float? = null,
+    val latestTag: String? = null,
+    val latestName: String? = null,
+    val changelog: String? = null,
+    val htmlUrl: String? = null,
+    val apkUrl: String? = null,
+    val hasUpdate: Boolean = false,
+    val message: String? = null,
+    val installUri: Uri? = null,
+)
+
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _state = MutableStateFlow(HomeUiState(refreshing = true))
     val state: StateFlow<HomeUiState> = _state.asStateFlow()
 
     private val shizukuController = ShizukuController(application)
     val shizuku: StateFlow<ShizukuUiState> = shizukuController.state
+
+    private val _update = MutableStateFlow(UpdateUiState())
+    val update: StateFlow<UpdateUiState> = _update.asStateFlow()
 
     private var refreshJob: Job? = null
     private var debounceJob: Job? = null
@@ -113,6 +133,67 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.Default) {
             shizukuController.clearLock(subId)
         }
+    }
+
+    fun checkUpdate() {
+        viewModelScope.launch {
+            _update.update { it.copy(checking = true, message = null) }
+            runCatching {
+                withContext(Dispatchers.IO) { UpdateClient.check() }
+            }.onSuccess { release ->
+                _update.update {
+                    it.copy(
+                        checking = false,
+                        latestTag = release.tag,
+                        latestName = release.name.ifBlank { release.tag },
+                        changelog = release.changelog,
+                        htmlUrl = release.htmlUrl,
+                        apkUrl = release.apkUrl,
+                        hasUpdate = release.newerThanCurrent && release.apkUrl != null,
+                        message = when {
+                            release.apkUrl == null -> "找到 Release，但没有 APK 附件"
+                            release.newerThanCurrent -> "发现 ${release.tag}（当前 ${BuildConfig.VERSION_NAME}）"
+                            else -> "已是最新版本 ${BuildConfig.VERSION_NAME}"
+                        },
+                    )
+                }
+            }.onFailure { err ->
+                _update.update {
+                    it.copy(checking = false, message = "检查失败：${err.message}")
+                }
+            }
+        }
+    }
+
+    fun downloadUpdate() {
+        val url = _update.value.apkUrl ?: return
+        viewModelScope.launch {
+            _update.update { it.copy(downloading = true, progress = 0f, message = "正在下载…") }
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    UpdateClient.download(getApplication(), url) { p ->
+                        _update.update { it.copy(progress = p) }
+                    }
+                }
+            }.onSuccess { uri ->
+                _update.update {
+                    it.copy(
+                        downloading = false,
+                        progress = 1f,
+                        installUri = uri,
+                        message = "下载完成，正在唤起安装",
+                    )
+                }
+            }.onFailure { err ->
+                _update.update {
+                    it.copy(downloading = false, message = "下载失败：${err.message}")
+                }
+            }
+        }
+    }
+
+    fun consumeInstallUri() {
+        _update.update { it.copy(installUri = null) }
     }
 
     private suspend fun refreshCellular() {

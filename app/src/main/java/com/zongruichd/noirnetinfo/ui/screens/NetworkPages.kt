@@ -35,6 +35,7 @@ import com.zongruichd.noirnetinfo.data.IpScope
 import com.zongruichd.noirnetinfo.data.IpVersion
 import com.zongruichd.noirnetinfo.data.NetworkSnapshot
 import com.zongruichd.noirnetinfo.ui.components.CopyableRow
+import com.zongruichd.noirnetinfo.ui.components.ExpandableBlock
 import com.zongruichd.noirnetinfo.ui.components.SectionCard
 import com.zongruichd.noirnetinfo.ui.util.formatTime
 import com.zongruichd.noirnetinfo.ui.util.label
@@ -166,7 +167,13 @@ private fun v6Of(snapshot: NetworkSnapshot) =
 
 @Composable
 fun AddressPage(snapshot: NetworkSnapshot, onCopy: (String) -> Unit) {
-    SectionCard(title = "本机地址", icon = Icons.Outlined.Language) {
+    SectionCard(
+        title = "本机地址",
+        icon = Icons.Outlined.Language,
+        summary = "${snapshot.addresses.size} 条 · DNS ${snapshot.connectivity.dns.size}",
+        collapsible = snapshot.addresses.size > 6,
+        initiallyExpanded = true,
+    ) {
         val v4 = snapshot.addresses.filter { it.version == IpVersion.V4 }
         val v6 = snapshot.addresses.filter { it.version == IpVersion.V6 }
         if (v4.isEmpty() && v6.isEmpty()) {
@@ -254,21 +261,40 @@ fun PublicIpPage(snapshot: NetworkSnapshot, onCopy: (String) -> Unit) {
 
 @Composable
 fun InterfacePage(snapshot: NetworkSnapshot, onCopy: (String) -> Unit) {
-    SectionCard(title = "网络接口", icon = Icons.Outlined.Router) {
-        snapshot.interfaces.forEachIndexed { index, iface ->
+    val active = snapshot.interfaces.filter { it.up && !it.loopback }
+    SectionCard(
+        title = "网络接口（${snapshot.interfaces.size}）",
+        icon = Icons.Outlined.Router,
+        summary = active.joinToString(" · ") { it.name }.ifBlank { "没有活动接口" },
+        collapsible = true,
+        initiallyExpanded = true,
+    ) {
+        snapshot.interfaces.forEach { iface ->
             val flags = buildList {
                 if (iface.up) add("UP") else add("DOWN")
                 if (iface.loopback) add("loopback")
                 if (iface.virtual) add("virtual")
                 if (iface.mtu > 0) add("MTU ${iface.mtu}")
             }
-            CopyableRow(
-                label = "${iface.name} · ${flags.joinToString(" · ")}",
-                value = (iface.ipv4 + iface.ipv6).joinToString("\n").ifBlank { null },
-                onCopy = onCopy,
-                placeholder = "无地址",
-                showDivider = index != snapshot.interfaces.lastIndex,
-            )
+            val addrs = (iface.ipv4 + iface.ipv6)
+            ExpandableBlock(
+                title = "${iface.name} · ${flags.joinToString(" · ")}",
+                subtitle = addrs.firstOrNull() ?: "无地址",
+                initiallyExpanded = iface.up && !iface.loopback && addrs.size <= 2,
+            ) {
+                if (addrs.isEmpty()) {
+                    CopyableRow("地址", null, onCopy, placeholder = "无地址", showDivider = false)
+                } else {
+                    addrs.forEachIndexed { i, addr ->
+                        CopyableRow(
+                            if (addr.contains(':')) "IPv6" else "IPv4",
+                            addr,
+                            onCopy,
+                            showDivider = i != addrs.lastIndex,
+                        )
+                    }
+                }
+            }
         }
     }
 }

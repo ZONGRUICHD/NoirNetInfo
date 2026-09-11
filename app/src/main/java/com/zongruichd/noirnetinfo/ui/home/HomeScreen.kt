@@ -27,6 +27,7 @@ import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Router
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.SimCard
 import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.DrawerValue
@@ -75,6 +76,7 @@ import com.zongruichd.noirnetinfo.ui.screens.InterfacePage
 import com.zongruichd.noirnetinfo.ui.screens.OverviewPage
 import com.zongruichd.noirnetinfo.ui.screens.PermissionBanner
 import com.zongruichd.noirnetinfo.ui.screens.PublicIpPage
+import com.zongruichd.noirnetinfo.ui.screens.SettingsPage
 import com.zongruichd.noirnetinfo.ui.screens.SimDetailPage
 import com.zongruichd.noirnetinfo.ui.screens.WifiPage
 import com.zongruichd.noirnetinfo.ui.util.toShareText
@@ -87,12 +89,14 @@ private const val DEST_IFACE = "iface"
 private const val DEST_WIFI = "wifi"
 private const val DEST_CELL = "cell"
 private const val DEST_SIM = "sim"
+private const val DEST_SETTINGS = "settings"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(vm: HomeViewModel = viewModel()) {
     val state by vm.state.collectAsState()
     val shizuku by vm.shizuku.collectAsState()
+    val update by vm.update.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
@@ -124,6 +128,7 @@ fun HomeScreen(vm: HomeViewModel = viewModel()) {
         DEST_WIFI -> "Wi-Fi"
         DEST_CELL -> "蜂窝"
         DEST_SIM -> selectedSim?.let { "${it.title} · ${it.subtitle}" } ?: "SIM"
+        DEST_SETTINGS -> "设置"
         else -> "NoirNetInfo"
     }
 
@@ -197,6 +202,13 @@ fun HomeScreen(vm: HomeViewModel = viewModel()) {
                             }
                         }
                     }
+                    item { Spacer(Modifier.height(8.dp)); HorizontalDivider(); DrawerLabel("系统") }
+                    item {
+                        DrawerItem("设置", Icons.Outlined.Settings, dest == DEST_SETTINGS) {
+                            dest = DEST_SETTINGS
+                            scope.launch { drawerState.close() }
+                        }
+                    }
                 }
             }
         },
@@ -211,6 +223,11 @@ fun HomeScreen(vm: HomeViewModel = viewModel()) {
                         }
                     },
                     actions = {
+                        IconButton(onClick = {
+                            dest = DEST_SETTINGS
+                        }) {
+                            Icon(Icons.Outlined.Settings, contentDescription = "设置")
+                        }
                         IconButton(
                             onClick = { snapshot?.let { onCopy(it.toShareText()) } },
                             enabled = snapshot != null,
@@ -240,7 +257,7 @@ fun HomeScreen(vm: HomeViewModel = viewModel()) {
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    if (snapshot != null && (!snapshot.locationGranted || !snapshot.phoneGranted)) {
+                    if (dest != DEST_SETTINGS && snapshot != null && (!snapshot.locationGranted || !snapshot.phoneGranted)) {
                         item {
                             PermissionBanner(
                                 locationGranted = snapshot.locationGranted,
@@ -268,20 +285,28 @@ fun HomeScreen(vm: HomeViewModel = viewModel()) {
                                     SimDetailPage(
                                         slot = sim,
                                         locationGranted = snapshot?.locationGranted == true,
-                                        shizuku = shizuku,
                                         onCopy = ::onCopy,
-                                        onRequestShizuku = vm::requestShizuku,
-                                        onApplyLock = { gsm, wcdma, lte, nr, lteBands, nrBands, wcdmaBands, arfcn, pci ->
-                                            vm.applyCellularLock(
-                                                sim.subscriptionId,
-                                                gsm, wcdma, lte, nr,
-                                                lteBands, nrBands, wcdmaBands,
-                                                arfcn, pci, sim.primaryServing?.rat,
-                                            )
-                                        },
-                                        onClearLock = { vm.clearCellularLock(sim.subscriptionId) },
+                                        onOpenSettings = { dest = DEST_SETTINGS },
                                     )
                                 }
+                                DEST_SETTINGS -> SettingsPage(
+                                    slots = snapshot?.slots.orEmpty(),
+                                    shizuku = shizuku,
+                                    update = update,
+                                    onCopy = ::onCopy,
+                                    onRequestShizuku = vm::requestShizuku,
+                                    onCheckUpdate = vm::checkUpdate,
+                                    onDownloadUpdate = vm::downloadUpdate,
+                                    onConsumeInstallUri = vm::consumeInstallUri,
+                                    onApplyLock = { subId, gsm, wcdma, lte, nr, lteBands, nrBands, wcdmaBands, arfcn, pci, servingRat ->
+                                        vm.applyCellularLock(
+                                            subId, gsm, wcdma, lte, nr,
+                                            lteBands, nrBands, wcdmaBands,
+                                            arfcn, pci, servingRat,
+                                        )
+                                    },
+                                    onClearLock = vm::clearCellularLock,
+                                )
                             }
                         }
                     }
@@ -298,6 +323,7 @@ private fun DrawerHeader() {
             painter = painterResource(R.drawable.logo_app),
             contentDescription = "NoirNetInfo Logo",
             contentScale = ContentScale.Crop,
+            alignment = Alignment.TopCenter,
             modifier = Modifier.fillMaxSize(),
         )
         Box(

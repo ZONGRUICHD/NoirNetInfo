@@ -35,7 +35,7 @@ fun SignalMeter(
         quality >= 0.45f -> MaterialTheme.colorScheme.tertiary
         else -> MaterialTheme.colorScheme.error
     }
-    Column(modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
+    Column(modifier.padding(horizontal = 16.dp, vertical = 5.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
             Text(
@@ -49,7 +49,7 @@ fun SignalMeter(
             progress = { if (shown == null) 0f else raw.coerceIn(0f, 1f) },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(8.dp),
+                .height(6.dp),
             color = color,
             trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
         )
