@@ -12,6 +12,7 @@ fun IpScope.label(): String = when (this) {
     IpScope.LOOPBACK -> "回环"
     IpScope.LINK_LOCAL -> "链路本地"
     IpScope.PRIVATE -> "私网"
+    IpScope.SHARED -> "运营商共享（CGNAT）"
     IpScope.ULA -> "ULA"
     IpScope.GLOBAL -> "全球"
     IpScope.OTHER -> "其他"
@@ -38,9 +39,9 @@ fun CellRole.label(): String = when (this) {
 }
 
 fun CellRecord.headline(): String {
-    val pci = identity["PCI"] ?: identity["PSC"] ?: identity["BSIC"]
+    val pci = listOf("PCI", "PSC", "BSIC").firstNotNullOfOrNull { key -> identity[key]?.let { "$key $it" } }
     val id = identity["ECI"] ?: identity["NCI"] ?: identity["CI"] ?: identity["BID"]
-    return listOfNotNull(rat, pci?.let { "PCI $it" }, id?.let { "ID $it" }).joinToString(" · ")
+    return listOfNotNull(rat, pci, id?.let { "ID $it" }).joinToString(" · ")
 }
 
 fun NetworkSnapshot.toShareText(): String = buildString {

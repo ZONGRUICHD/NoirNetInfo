@@ -1,5 +1,7 @@
 package com.zongruichd.noirnetinfo.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -73,24 +75,31 @@ fun SettingsPage(
     onClearLock: (Int) -> Unit,
 ) {
     val context = LocalContext.current
+    var installerError by remember { mutableStateOf<String?>(null) }
+    fun installDownloaded() {
+        val uri = update.installUri ?: return
+        runCatching {
+            context.startActivity(Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            })
+        }.onSuccess { onConsumeInstallUri() }
+            .onFailure { installerError = "无法打开安装器：${it.message}" }
+    }
+    val installPermission = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        if (context.packageManager.canRequestPackageInstalls()) installDownloaded()
+        else installerError = "尚未允许安装；APK 已保留，可点击继续安装重试。"
+    }
+    fun continueInstall() {
+        installerError = null
+        if (context.packageManager.canRequestPackageInstalls()) installDownloaded()
+        else runCatching {
+            installPermission.launch(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:${context.packageName}")))
+        }.onFailure { installerError = "无法打开安装授权设置：${it.message}" }
+    }
     LaunchedEffect(update.installUri) {
-        val uri = update.installUri ?: return@LaunchedEffect
-        if (Build.VERSION.SDK_INT >= 26 && !context.packageManager.canRequestPackageInstalls()) {
-            context.startActivity(
-                Intent(
-                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                    Uri.parse("package:${context.packageName}"),
-                ),
-            )
-            return@LaunchedEffect
-        }
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        context.startActivity(intent)
-        onConsumeInstallUri()
+        if (update.installUri != null) continueInstall()
     }
 
     SectionCard(title = "关于", icon = Icons.Outlined.VerifiedUser) {
@@ -126,7 +135,7 @@ fun SettingsPage(
             showDivider = update.changelog != null || update.message != null,
         )
         update.changelog?.let { notes ->
-            CopyableRow("更新说明", notes.take(400), onCopy, mono = false, showDivider = update.message != null)
+            CopyableRow("更新说明", notes, onCopy, mono = false, showDivider = update.message != null)
         }
         update.message?.let { CopyableRow("说明", it, onCopy, mono = false, showDivider = false) }
         if (update.downloading) {
@@ -144,21 +153,15 @@ fun SettingsPage(
         ) { Text(if (update.checking) "检查中…" else "检查更新") }
         if (update.hasUpdate && update.apkUrl != null) {
             Button(
-                onClick = {
-                    if (Build.VERSION.SDK_INT >= 26 && !context.packageManager.canRequestPackageInstalls()) {
-                        context.startActivity(
-                            Intent(
-                                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                                Uri.parse("package:${context.packageName}"),
-                            ),
-                        )
-                    }
-                    onDownloadUpdate()
-                },
+                onClick = onDownloadUpdate,
                 enabled = !update.downloading,
                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp),
             ) { Text(if (update.downloading) "下载中…" else "下载并安装") }
         }
+        if (update.installUri != null) {
+            Button(onClick = { continueInstall() }, modifier = Modifier.padding(16.dp)) { Text("继续安装已下载 APK") }
+        }
+        installerError?.let { Text(it, modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error) }
         update.htmlUrl?.let { url ->
             TextButton(
                 onClick = {
@@ -175,8 +178,8 @@ fun SettingsPage(
         CopyableRow(
             "能力",
             when {
-                shizuku.uid == 0 -> "Root：制式 / Band / 频点 / PCI(AT)"
-                shizuku.uid == 2000 -> "ADB：制式 / Band / 频点（PCI 需要 Root）"
+                shizuku.uid == 0 -> "Root：尝试制式 / Band / 频点；支持情况取决于设备"
+                shizuku.uid == 2000 -> "ADB：尝试制式 / Band / 频点；支持情况取决于系统"
                 else -> "授权后用 shell 权限调用电话接口"
             },
             onCopy,
@@ -198,7 +201,7 @@ fun SettingsPage(
             }
         } else {
             Text(
-                "已授权，可在下方锁网。PCI 锁定需要 Shizuku Root。",
+                "已授权。制式设置需要 Android 13+；Band / 频点取决于系统实现。PCI 尚未适配。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -247,21 +250,21 @@ private fun ShizukuLockPanel(
     }
     val slot = slots.firstOrNull { it.subscriptionId == selectedSub } ?: slots.first()
     val serving = slot.primaryServing
-    val guessedBand = serving?.band?.filter { it.isDigit() }?.toIntOrNull()
+    var channelRat by rememberSaveable(slot.subscriptionId) { mutableStateOf("LTE") }
     var gsm by rememberSaveable(slot.subscriptionId) { mutableStateOf(true) }
     var wcdma by rememberSaveable(slot.subscriptionId) { mutableStateOf(true) }
     var lte by rememberSaveable(slot.subscriptionId) { mutableStateOf(true) }
     var nr by rememberSaveable(slot.subscriptionId) { mutableStateOf(true) }
     var lteBands by remember(slot.subscriptionId) {
-        mutableStateOf(guessedBand?.takeIf { it in LteBandChoices }?.let { setOf(it) } ?: emptySet())
+        mutableStateOf(emptySet<Int>())
     }
     var nrBands by remember(slot.subscriptionId) {
-        mutableStateOf(guessedBand?.takeIf { it in NrBandChoices }?.let { setOf(it) } ?: emptySet())
+        mutableStateOf(emptySet<Int>())
     }
     var wcdmaBands by remember(slot.subscriptionId) { mutableStateOf(emptySet<Int>()) }
-    var arfcnText by rememberSaveable(slot.subscriptionId) { mutableStateOf(serving?.arfcn?.toString().orEmpty()) }
+    var arfcnText by rememberSaveable(slot.subscriptionId) { mutableStateOf("") }
     var pciText by rememberSaveable(slot.subscriptionId) {
-        mutableStateOf(serving?.identity?.get("PCI").orEmpty())
+        mutableStateOf("")
     }
 
     if (slots.size > 1) {
@@ -280,6 +283,7 @@ private fun ShizukuLockPanel(
         }
     }
 
+    Text("未选择 Band、频点留空表示不追加限制。锁网可能导致断网。", modifier = Modifier.padding(16.dp))
     Text("制式", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 8.dp))
     FlowRow(
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -298,6 +302,12 @@ private fun ShizukuLockPanel(
     Text("WCDMA Band", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 16.dp, top = 8.dp))
     BandChips(WcdmaBandChoices, wcdmaBands, prefix = "B") { wcdmaBands = it }
 
+    Text("频点所属制式（留空不限制）", modifier = Modifier.padding(horizontal = 16.dp))
+    FlowRow(modifier = Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf("LTE", "NR").forEach { rat ->
+            FilterChip(selected = channelRat == rat, onClick = { channelRat = rat }, label = { Text(rat) })
+        }
+    }
     OutlinedTextField(
         value = arfcnText,
         onValueChange = { arfcnText = it.filter { ch -> ch.isDigit() } },
@@ -311,7 +321,8 @@ private fun ShizukuLockPanel(
     OutlinedTextField(
         value = pciText,
         onValueChange = { pciText = it.filter { ch -> ch.isDigit() } },
-        label = { Text("PCI（Root 模式）") },
+        label = { Text("PCI（尚未适配此设备）") },
+        enabled = false,
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 6.dp),
@@ -327,10 +338,11 @@ private fun ShizukuLockPanel(
                 lteBands.toList(), nrBands.toList(), wcdmaBands.toList(),
                 arfcnText.toIntOrNull(),
                 pciText.toIntOrNull(),
-                serving?.rat,
+                channelRat,
             )
         },
-        enabled = shizuku.ready,
+        enabled = shizuku.ready && (gsm || wcdma || lte || nr) &&
+            (arfcnText.isBlank() || (arfcnText.toIntOrNull()?.let { it in 0..(if (channelRat == "NR") 3279165 else 262143) } == true && if (channelRat == "NR") nr else lte)),
         modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp),
     ) { Text("应用锁定") }
     TextButton(

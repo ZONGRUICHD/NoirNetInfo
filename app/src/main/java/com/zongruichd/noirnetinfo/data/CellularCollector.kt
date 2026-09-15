@@ -135,8 +135,8 @@ object CellularCollector {
     private fun generationOf(dataType: Int?, override: String?, ss: ServiceState?): String {
         val nr = nrStateName(ss)
         return when {
-            override?.contains("5G SA") == true || nr == "5G SA 已连接" -> "5G SA"
-            override?.contains("5G NSA") == true || nr == "5G NSA 已连接" -> "5G NSA"
+            dataType == TelephonyManager.NETWORK_TYPE_NR -> "5G SA"
+            dataType == TelephonyManager.NETWORK_TYPE_LTE && nr == "5G 已连接" -> "5G NSA"
             dataType == TelephonyManager.NETWORK_TYPE_NR -> "5G"
             override?.contains("CA") == true || dataType == TelephonyManager.NETWORK_TYPE_LTE ->
                 if (override?.contains("CA") == true) "4G+" else "4G"
@@ -169,7 +169,7 @@ object CellularCollector {
             2 -> "LTE Advanced Pro"
             3 -> "5G NSA"
             4 -> "5G NSA mmWave"
-            5 -> "5G SA / Advanced"
+            5 -> "5G Advanced（显示标识）"
             else -> "override $type"
         }
     }
@@ -204,7 +204,7 @@ object CellularCollector {
 
     private fun toRecord(info: CellInfo): CellRecord? {
         val role = roleOf(info)
-        return when {
+        val record = when {
             info is CellInfoLte -> lte(info, role)
             info is CellInfoGsm -> gsm(info, role)
             info is CellInfoWcdma -> wcdma(info, role)
@@ -213,6 +213,10 @@ object CellularCollector {
             Build.VERSION.SDK_INT >= 29 && info is CellInfoNr -> nr(info, role)
             else -> null
         }
+        @Suppress("DEPRECATION")
+        val measured = info.timeStamp / 1_000_000
+        val age = android.os.SystemClock.elapsedRealtime() - measured
+        return record?.copy(measuredAtMillis = if (measured > 0 && age >= 0) System.currentTimeMillis() - age else null)
     }
 
     private fun roleOf(info: CellInfo): CellRole {
@@ -230,7 +234,7 @@ object CellularCollector {
     private fun lte(info: CellInfoLte, role: CellRole): CellRecord {
         val id = info.cellIdentity
         val ss = info.cellSignalStrength
-        val earfcn = id.earfcn.takeIf { it > 0 && it != CellInfo.UNAVAILABLE }
+        val earfcn = id.earfcn.takeIf { it >= 0 && it != CellInfo.UNAVAILABLE }
         val band = earfcn?.let { BandLookup.lte(it) }
         val rsrp = ss.rsrp.avail()
         val rsrq = ss.rsrq.avail()
@@ -243,7 +247,7 @@ object CellularCollector {
         put(identity, "PCI", id.pci.avail())
         put(identity, "ECI", id.ci.avail())
         put(identity, "EARFCN", earfcn)
-        if (Build.VERSION.SDK_INT >= 28) put(identity, "带宽 kHz", id.bandwidth.takeIf { it > 0 })
+        if (Build.VERSION.SDK_INT >= 28) put(identity, "带宽 kHz", id.bandwidth.takeIf { it > 0 && it != CellInfo.UNAVAILABLE })
         if (Build.VERSION.SDK_INT >= 30) put(identity, "Bands", id.bands.takeIf { it.isNotEmpty() }?.joinToString { "B$it" })
         val radio = linkedMapOf<String, String>()
         put(radio, "RSRP", rsrp, " dBm")
@@ -252,8 +256,8 @@ object CellularCollector {
         put(radio, "RSSI", rssi, " dBm")
         put(radio, "CQI", ss.cqi.avail())
         put(radio, "dBm", ss.dbm.avail())
-        put(radio, "ASU", ss.asuLevel.takeIf { it >= 0 })
-        put(radio, "电平", ss.level.takeIf { it >= 0 })
+        put(radio, "ASU", ss.asuLevel.takeIf { it in 0..97 })
+        put(radio, "电平", ss.level.takeIf { it in 0..4 })
         if (Build.VERSION.SDK_INT >= 34) {
             runCatching {
                 val ta = ss.javaClass.getMethod("getTimingAdvance").invoke(ss) as Int
@@ -273,18 +277,19 @@ object CellularCollector {
             sinr = sinr,
             rssi = rssi,
             dbm = ss.dbm.avail(),
-            asu = ss.asuLevel.takeIf { it >= 0 },
-            level = ss.level.takeIf { it >= 0 },
+            asu = ss.asuLevel.takeIf { it in 0..97 },
+            level = ss.level.takeIf { it in 0..4 },
             band = band?.name,
             frequencyMhz = band?.frequencyMhz,
             arfcn = earfcn,
         )
     }
 
+    @androidx.annotation.RequiresApi(29)
     private fun nr(info: CellInfoNr, role: CellRole): CellRecord {
         val id = info.cellIdentity as CellIdentityNr
         val ss = info.cellSignalStrength as CellSignalStrengthNr
-        val arfcn = id.nrarfcn.takeIf { it > 0 && it != CellInfo.UNAVAILABLE }
+        val arfcn = id.nrarfcn.takeIf { it >= 0 && it != CellInfo.UNAVAILABLE }
         val band = arfcn?.let { BandLookup.nr(it) }
         val rsrp = ss.ssRsrp.avail()
         val rsrq = ss.ssRsrq.avail()
@@ -305,8 +310,8 @@ object CellularCollector {
         put(radio, "CSI-RSRQ", ss.csiRsrq.avail(), " dB")
         put(radio, "CSI-SINR", ss.csiSinr.avail(), " dB")
         put(radio, "dBm", ss.dbm.avail())
-        put(radio, "ASU", ss.asuLevel.takeIf { it >= 0 })
-        put(radio, "电平", ss.level.takeIf { it >= 0 })
+        put(radio, "ASU", ss.asuLevel.takeIf { it in 0..97 })
+        put(radio, "电平", ss.level.takeIf { it in 0..4 })
         return CellRecord(
             rat = "NR 5G",
             registered = info.isRegistered,
@@ -319,9 +324,9 @@ object CellularCollector {
             rsrq = rsrq,
             sinr = sinr,
             dbm = ss.dbm.avail(),
-            asu = ss.asuLevel.takeIf { it >= 0 },
-            level = ss.level.takeIf { it >= 0 },
-            band = band?.name,
+            asu = ss.asuLevel.takeIf { it in 0..97 },
+            level = ss.level.takeIf { it in 0..4 },
+            band = (if (Build.VERSION.SDK_INT >= 30) id.bands.takeIf { it.isNotEmpty() }?.joinToString(" / ") { "n$it" } else null) ?: band?.name,
             frequencyMhz = band?.frequencyMhz,
             arfcn = arfcn,
         )
@@ -343,10 +348,10 @@ object CellularCollector {
         val rxl = if (Build.VERSION.SDK_INT >= 30) ss.rssi.avail() else ss.dbm.avail()
         put(radio, "RXLEV", rxl, " dBm")
         put(radio, "dBm", ss.dbm.avail())
-        put(radio, "ASU", ss.asuLevel.takeIf { it >= 0 })
-        put(radio, "电平", ss.level.takeIf { it >= 0 })
+        put(radio, "ASU", ss.asuLevel.takeIf { it in 0..97 })
+        put(radio, "电平", ss.level.takeIf { it in 0..4 })
         if (Build.VERSION.SDK_INT >= 26) put(radio, "TA", ss.timingAdvance.avail())
-        put(radio, "BER", ss.bitErrorRate.takeIf { it >= 0 })
+        if (Build.VERSION.SDK_INT >= 29) put(radio, "BER", ss.bitErrorRate.takeIf { it in 0..7 })
         return CellRecord(
             rat = "GSM",
             registered = info.isRegistered,
@@ -357,8 +362,8 @@ object CellularCollector {
             radio = radio,
             rssi = rxl,
             dbm = ss.dbm.avail(),
-            asu = ss.asuLevel.takeIf { it >= 0 },
-            level = ss.level.takeIf { it >= 0 },
+            asu = ss.asuLevel.takeIf { it in 0..97 },
+            level = ss.level.takeIf { it in 0..4 },
             band = band?.name,
             arfcn = arfcn,
         )
@@ -380,8 +385,8 @@ object CellularCollector {
         val rxl = ss.dbm.avail()
         put(radio, "RSCP", rxl, " dBm")
         if (Build.VERSION.SDK_INT >= 30) put(radio, "Ec/No", ss.ecNo.avail(), " dB")
-        put(radio, "ASU", ss.asuLevel.takeIf { it >= 0 })
-        put(radio, "电平", ss.level.takeIf { it >= 0 })
+        put(radio, "ASU", ss.asuLevel.takeIf { it in 0..97 })
+        put(radio, "电平", ss.level.takeIf { it in 0..4 })
         return CellRecord(
             rat = "WCDMA",
             registered = info.isRegistered,
@@ -391,14 +396,15 @@ object CellularCollector {
             identity = identity,
             radio = radio,
             dbm = rxl,
-            asu = ss.asuLevel.takeIf { it >= 0 },
-            level = ss.level.takeIf { it >= 0 },
+            asu = ss.asuLevel.takeIf { it in 0..97 },
+            level = ss.level.takeIf { it in 0..4 },
             band = band?.name,
             frequencyMhz = band?.frequencyMhz,
             arfcn = uarfcn,
         )
     }
 
+    @androidx.annotation.RequiresApi(29)
     private fun tdscdma(info: CellInfoTdscdma, role: CellRole): CellRecord {
         val id = info.cellIdentity
         val ss = info.cellSignalStrength
@@ -412,8 +418,8 @@ object CellularCollector {
         put(identity, "UARFCN", uarfcn)
         val radio = linkedMapOf<String, String>()
         put(radio, "RSCP", ss.dbm.avail(), " dBm")
-        put(radio, "ASU", ss.asuLevel.takeIf { it >= 0 })
-        put(radio, "电平", ss.level.takeIf { it >= 0 })
+        put(radio, "ASU", ss.asuLevel.takeIf { it in 0..97 })
+        put(radio, "电平", ss.level.takeIf { it in 0..4 })
         return CellRecord(
             rat = "TD-SCDMA",
             registered = info.isRegistered,
@@ -423,8 +429,8 @@ object CellularCollector {
             identity = identity,
             radio = radio,
             dbm = ss.dbm.avail(),
-            asu = ss.asuLevel.takeIf { it >= 0 },
-            level = ss.level.takeIf { it >= 0 },
+            asu = ss.asuLevel.takeIf { it in 0..97 },
+            level = ss.level.takeIf { it in 0..4 },
             band = uarfcn?.let { "TD-SCDMA" },
             arfcn = uarfcn,
         )
@@ -444,7 +450,7 @@ object CellularCollector {
         put(radio, "EVDO Ec/Io", ss.evdoEcio.takeIf { it != Int.MAX_VALUE }, " dB")
         put(radio, "EVDO SNR", ss.evdoSnr.takeIf { it >= 0 })
         put(radio, "dBm", ss.dbm.avail())
-        put(radio, "电平", ss.level.takeIf { it >= 0 })
+        put(radio, "电平", ss.level.takeIf { it in 0..4 })
         return CellRecord(
             rat = "CDMA",
             registered = info.isRegistered,
@@ -454,7 +460,7 @@ object CellularCollector {
             identity = identity,
             radio = radio,
             dbm = ss.dbm.avail(),
-            level = ss.level.takeIf { it >= 0 },
+            level = ss.level.takeIf { it in 0..4 },
         )
     }
 
@@ -462,7 +468,7 @@ object CellularCollector {
         takeUnless { this == CellInfo.UNAVAILABLE || this == Int.MAX_VALUE || this == Int.MIN_VALUE || this == Integer.MAX_VALUE }
 
     private fun Long.availLong(): Long? =
-        takeUnless { this == CellInfo.UNAVAILABLE.toLong() || this == Long.MAX_VALUE || this < 0 }
+        takeUnless { this == Long.MAX_VALUE || this < 0 }
 
     private fun CellIdentityLte.mccStringCompat(): String? =
         if (Build.VERSION.SDK_INT >= 28) mccString else @Suppress("DEPRECATION") mcc.takeIf { it > 0 }?.toString()

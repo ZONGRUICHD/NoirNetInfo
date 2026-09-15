@@ -48,6 +48,7 @@ fun PermissionBanner(
     forCells: Boolean,
     onGrant: () -> Unit,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     if (locationGranted && phoneGranted) return
     ElevatedCard(
         shape = MaterialTheme.shapes.extraLarge,
@@ -62,7 +63,7 @@ fun PermissionBanner(
             Text(
                 buildString {
                     if (!locationGranted) {
-                        append(if (forCells) "位置权限用于读取服务小区、邻区和 Wi-Fi 名称。" else "位置权限用于读取 Wi-Fi 名称。")
+                        append(if (forCells) "精确位置权限用于读取服务小区、邻区和 Wi-Fi 名称。" else "精确位置权限用于读取 Wi-Fi 名称。")
                     }
                     if (!locationGranted && !phoneGranted) append(" ")
                     if (!phoneGranted) append("电话权限用于读取 SIM、运营商与制式。")
@@ -72,6 +73,10 @@ fun PermissionBanner(
             )
             Spacer(Modifier.height(12.dp))
             Button(onClick = onGrant) { Text("授予权限") }
+            androidx.compose.material3.TextButton(onClick = {
+                context.startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    android.net.Uri.parse("package:${context.packageName}")))
+            }) { Text("已拒绝授权？打开应用设置") }
         }
     }
 }
@@ -104,9 +109,9 @@ fun OverviewPage(snapshot: NetworkSnapshot?, onCopy: (String) -> Unit) {
                 )
             }
             Spacer(Modifier.height(12.dp))
-            val v4 = snapshot?.addresses?.firstOrNull { it.version == IpVersion.V4 && it.scope != IpScope.LINK_LOCAL }
-            val v6 = snapshot?.addresses?.firstOrNull { it.version == IpVersion.V6 && it.scope == IpScope.GLOBAL }
-                ?: snapshot?.addresses?.firstOrNull { it.version == IpVersion.V6 && it.scope == IpScope.ULA }
+            val v4 = snapshot?.addresses?.firstOrNull { it.iface == snapshot?.connectivity?.interfaceName && it.version == IpVersion.V4 && it.scope != IpScope.LINK_LOCAL }
+            val v6 = snapshot?.addresses?.firstOrNull { it.iface == snapshot?.connectivity?.interfaceName && it.version == IpVersion.V6 && it.scope == IpScope.GLOBAL }
+                ?: snapshot?.addresses?.firstOrNull { it.iface == snapshot?.connectivity?.interfaceName && it.version == IpVersion.V6 && it.scope == IpScope.ULA }
             Text(
                 v4?.hostAddress ?: "暂无 IPv4",
                 style = MaterialTheme.typography.headlineMedium,
@@ -129,10 +134,10 @@ fun OverviewPage(snapshot: NetworkSnapshot?, onCopy: (String) -> Unit) {
                     if (conn.vpn) AssistChip(onClick = {}, label = { Text("VPN") })
                     if (conn.captivePortal) AssistChip(onClick = {}, label = { Text("强制门户") })
                     if (conn.metered) AssistChip(onClick = {}, label = { Text("计费网络") })
-                    if (conn.hasInternet) AssistChip(onClick = {}, label = { Text("可上网") })
+                    if (conn.hasInternet && !conn.validated) AssistChip(onClick = {}, label = { Text("互联网未验证") })
                 }
-                snapshot?.slots?.firstOrNull()?.operator?.generation?.let {
-                    AssistChip(onClick = {}, label = { Text(it) })
+                snapshot?.slots?.firstOrNull { it.isDefaultData }?.operator?.generation?.let {
+                    AssistChip(onClick = {}, label = { Text("数据卡 · $it") })
                 }
             }
             if (snapshot != null) {
@@ -151,7 +156,7 @@ fun OverviewPage(snapshot: NetworkSnapshot?, onCopy: (String) -> Unit) {
             CopyableRow("主 IPv4", v4Of(snapshot), onCopy)
             CopyableRow("主 IPv6", v6Of(snapshot), onCopy)
             CopyableRow("Wi-Fi", snapshot.wifi?.ssid ?: snapshot.wifi?.let { "已连接" }, onCopy, mono = false)
-            val slot = snapshot.slots.firstOrNull()
+            val slot = snapshot.slots.firstOrNull { it.isDefaultData }
             CopyableRow("默认数据卡", slot?.let { "${it.title} · ${it.subtitle}" }, onCopy, mono = false)
             CopyableRow("公网 IPv4", snapshot.publicIp.ipv4, onCopy, showDivider = false)
         }
@@ -159,11 +164,11 @@ fun OverviewPage(snapshot: NetworkSnapshot?, onCopy: (String) -> Unit) {
 }
 
 private fun v4Of(snapshot: NetworkSnapshot) =
-    snapshot.addresses.firstOrNull { it.version == IpVersion.V4 && it.scope != IpScope.LINK_LOCAL }?.hostAddress
+    snapshot.addresses.firstOrNull { it.iface == snapshot?.connectivity?.interfaceName && it.version == IpVersion.V4 && it.scope != IpScope.LINK_LOCAL }?.hostAddress
 
 private fun v6Of(snapshot: NetworkSnapshot) =
-    snapshot.addresses.firstOrNull { it.version == IpVersion.V6 && it.scope == IpScope.GLOBAL }?.hostAddress
-        ?: snapshot.addresses.firstOrNull { it.version == IpVersion.V6 && it.scope == IpScope.ULA }?.hostAddress
+    snapshot.addresses.firstOrNull { it.iface == snapshot?.connectivity?.interfaceName && it.version == IpVersion.V6 && it.scope == IpScope.GLOBAL }?.hostAddress
+        ?: snapshot.addresses.firstOrNull { it.iface == snapshot?.connectivity?.interfaceName && it.version == IpVersion.V6 && it.scope == IpScope.ULA }?.hostAddress
 
 @Composable
 fun AddressPage(snapshot: NetworkSnapshot, onCopy: (String) -> Unit) {
@@ -217,7 +222,7 @@ fun WifiPage(snapshot: NetworkSnapshot, onCopy: (String) -> Unit) {
             CopyableRow("状态", "当前不是 Wi-Fi 连接", onCopy, mono = false, showDivider = false)
             return@SectionCard
         }
-        CopyableRow("SSID", wifi.ssid ?: if (wifi.needsLocation) "需要位置权限" else "未知", onCopy, mono = wifi.ssid != null)
+        CopyableRow("SSID", wifi.ssid ?: if (wifi.needsLocation) "需要精确位置权限并开启定位" else "系统未提供", onCopy, mono = wifi.ssid != null)
         CopyableRow("BSSID", wifi.bssid, onCopy)
         CopyableRow("信号", wifi.rssiDbm?.let { "$it dBm" }, onCopy, mono = false)
         CopyableRow(
@@ -232,7 +237,7 @@ fun WifiPage(snapshot: NetworkSnapshot, onCopy: (String) -> Unit) {
         CopyableRow("加密", wifi.security, onCopy, mono = false)
         CopyableRow("隐藏 SSID", wifi.hiddenSsid?.let { if (it) "是" else "否" }, onCopy, mono = false, showDivider = false)
     }
-    SectionCard(title = "链路", icon = Icons.Outlined.Router) {
+    SectionCard(title = "默认网络链路（含 VPN）", icon = Icons.Outlined.Router) {
         CopyableRow("网关", snapshot.connectivity.gateways.joinToString().ifBlank { null }, onCopy)
         CopyableRow("DNS", snapshot.connectivity.dns.joinToString().ifBlank { null }, onCopy)
         CopyableRow("DHCP", snapshot.connectivity.dhcpServer, onCopy, showDivider = false)
@@ -251,7 +256,8 @@ fun PublicIpPage(snapshot: NetworkSnapshot, onCopy: (String) -> Unit) {
             }
         } else {
             CopyableRow("公网 IPv4", pub.ipv4, onCopy)
-            CopyableRow("公网 IPv6", pub.ipv6, onCopy, showDivider = pub.error != null)
+            CopyableRow("公网 IPv6", pub.ipv6, onCopy, placeholder = "IPv6 查询未成功，不代表设备不支持", showDivider = true)
+            CopyableRow("查询出口", "当前默认网络（可能经 VPN）；由 ipify 返回", onCopy, mono = false, showDivider = pub.error != null)
             AnimatedVisibility(visible = pub.error != null) {
                 CopyableRow("说明", pub.error, onCopy, mono = false, showDivider = false)
             }

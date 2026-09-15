@@ -16,26 +16,27 @@ object BandLookup {
 
     fun nr(nrarfcn: Int): RadioBand {
         val mhz = nrFrequencyMhz(nrarfcn)
-        val name = NR.firstOrNull { mhz != null && mhz in it.fMin..it.fMax }?.let { "n${it.id}" }
-            ?: "NR"
-        return RadioBand(name, mhz?.let { (it * 10).roundToInt() / 10.0 })
+        val candidates = NR.filter { mhz != null && mhz in it.fMin..it.fMax }
+        val name = candidates.joinToString(" / ") { "n${it.id}" }
+            .takeIf { it.isNotEmpty() }?.let { "$it（频率推测）" } ?: "NR（频段未知）"
+        return RadioBand(name, mhz)
     }
 
     fun gsm(arfcn: Int): RadioBand? = when (arfcn) {
         in 0..124, in 975..1023 -> RadioBand("GSM 900", null)
         in 128..251 -> RadioBand("GSM 850", null)
-        in 512..885 -> RadioBand("DCS 1800", null)
-        in 512..810 -> RadioBand("PCS 1900 / DCS 1800", null)
+        in 512..810 -> RadioBand("PCS 1900 / DCS 1800（待确认）", null)
+        in 811..885 -> RadioBand("DCS 1800", null)
         else -> RadioBand("GSM", null)
     }
 
     fun wcdma(uarfcn: Int): RadioBand? = when (uarfcn) {
         in 10562..10838 -> RadioBand("B1 WCDMA 2100", 2112.4 + (uarfcn - 10562) * 0.2)
         in 9662..9938 -> RadioBand("B2 WCDMA 1900", 1932.4 + (uarfcn - 9662) * 0.2)
-        in 1162..1513 -> RadioBand("B5 WCDMA 850", 869.0 + (uarfcn - 1162) * 0.2)
-        in 2937..3088 -> RadioBand("B8 WCDMA 900", 925.0 + (uarfcn - 2937) * 0.2)
-        in 1537..1738 -> RadioBand("B4 WCDMA 1700", 2110.0 + (uarfcn - 1537) * 0.2)
-        in 9500..9600 -> RadioBand("B3 WCDMA 1800", null)
+        in 4357..4458 -> RadioBand("B5 WCDMA 850", uarfcn * 0.2)
+        in 2937..3088 -> RadioBand("B8 WCDMA 900", 340.0 + uarfcn * 0.2)
+        in 1537..1738 -> RadioBand("B4 WCDMA 1700", 1805.0 + uarfcn * 0.2)
+        in 1162..1513 -> RadioBand("B3 WCDMA 1800", 1575.0 + uarfcn * 0.2)
         else -> RadioBand("WCDMA", null)
     }
 

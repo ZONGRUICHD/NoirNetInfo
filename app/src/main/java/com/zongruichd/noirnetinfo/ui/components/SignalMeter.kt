@@ -39,14 +39,14 @@ fun SignalMeter(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
             Text(
-                text = shown?.let { "$it $unit" } ?: "—",
+                text = value?.let { "$it $unit" } ?: "—",
                 style = MaterialTheme.typography.titleMedium,
                 fontFamily = FontFamily.Monospace,
             )
         }
         Spacer(Modifier.height(6.dp))
         LinearProgressIndicator(
-            progress = { if (shown == null) 0f else raw.coerceIn(0f, 1f) },
+            progress = { if (shown == null) 0f else quality.coerceIn(0f, 1f) },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(6.dp),

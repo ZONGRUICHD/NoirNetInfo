@@ -8,7 +8,6 @@ import android.system.Os
 import android.telephony.RadioAccessSpecifier
 import android.telephony.TelephonyManager
 import android.util.Log
-import java.io.File
 
 class PrivilegedTelephonyService : IPrivilegedTelephony.Stub {
     private var appContext: Context? = null
@@ -41,7 +40,7 @@ class PrivilegedTelephonyService : IPrivilegedTelephony.Stub {
     @SuppressLint("MissingPermission")
     override fun getAllowedNetworkTypes(subId: Int): Long {
         val tm = tm(subId)
-        if (Build.VERSION.SDK_INT >= 30) {
+        if (Build.VERSION.SDK_INT >= 33) {
             return runCatching {
                 tm.getAllowedNetworkTypesForReason(TelephonyManager.ALLOWED_NETWORK_TYPES_REASON_USER)
             }.getOrDefault(-1L)
@@ -53,20 +52,14 @@ class PrivilegedTelephonyService : IPrivilegedTelephony.Stub {
     override fun setAllowedNetworkTypes(subId: Int, types: Long): String {
         val tm = tm(subId)
         return try {
-            if (Build.VERSION.SDK_INT >= 30) {
+            if (Build.VERSION.SDK_INT >= 33) {
                 tm.setAllowedNetworkTypesForReason(
                     TelephonyManager.ALLOWED_NETWORK_TYPES_REASON_USER,
                     types,
                 )
                 "已设置制式掩码 $types"
             } else {
-                val method = TelephonyManager::class.java.getMethod(
-                    "setPreferredNetworkType",
-                    Int::class.javaPrimitiveType,
-                    Int::class.javaPrimitiveType,
-                )
-                val ok = method.invoke(tm, subId, preferredFromMask(types)) as Boolean
-                if (ok) "已设置首选网络类型" else "setPreferredNetworkType 返回 false"
+                "当前系统不支持公开制式设置接口（需要 Android 13+）"
             }
         } catch (t: Throwable) {
             "制式锁定失败: ${t.message}"
@@ -82,6 +75,7 @@ class PrivilegedTelephonyService : IPrivilegedTelephony.Stub {
         channelRan: Int,
         channels: IntArray,
     ): String {
+        if (Build.VERSION.SDK_INT < 28) return "Band/频点接口需要 Android 9+"
         val tm = tm(subId)
         return try {
             val specifiers = ArrayList<RadioAccessSpecifier>()
@@ -101,7 +95,7 @@ class PrivilegedTelephonyService : IPrivilegedTelephony.Stub {
                 it.name == "setSystemSelectionChannels" && it.parameterTypes.size == 1
             } ?: throw IllegalStateException("当前系统没有 setSystemSelectionChannels")
             method.invoke(tm, specifiers)
-            "已应用 Band/频点选择（${specifiers.size} 组）"
+            "已提交 Band/频点选择请求（${specifiers.size} 组）；需观察小区信息确认是否生效"
         } catch (t: Throwable) {
             "Band/频点锁定失败: ${t.message}"
         }
@@ -109,17 +103,18 @@ class PrivilegedTelephonyService : IPrivilegedTelephony.Stub {
 
     @SuppressLint("MissingPermission")
     override fun clearSelection(subId: Int): String {
+        if (Build.VERSION.SDK_INT < 28) return "自动选网需要 Android 9+"
         val tm = tm(subId)
         val messages = mutableListOf<String>()
         runCatching {
             val method = TelephonyManager::class.java.methods.firstOrNull {
                 it.name == "setSystemSelectionChannels" && it.parameterTypes.size == 1
             }
-            method?.invoke(tm, emptyList<RadioAccessSpecifier>())
+            (method ?: error("当前系统没有 setSystemSelectionChannels")).invoke(tm, emptyList<RadioAccessSpecifier>())
             messages += "已清除 Band/频点选择"
         }.onFailure { messages += "清除频点失败: ${it.message}" }
         runCatching {
-            if (Build.VERSION.SDK_INT >= 30) {
+            if (Build.VERSION.SDK_INT >= 33) {
                 tm.setAllowedNetworkTypesForReason(
                     TelephonyManager.ALLOWED_NETWORK_TYPES_REASON_USER,
                     RatMask.ALL,
@@ -128,11 +123,14 @@ class PrivilegedTelephonyService : IPrivilegedTelephony.Stub {
             }
         }.onFailure { messages += "恢复制式失败: ${it.message}" }
         runCatching { tm.setNetworkSelectionModeAutomatic() }
+            .onSuccess { messages += "已切换自动选网" }
+            .onFailure { messages += "自动选网失败: ${it.message}" }
         return messages.joinToString("；")
     }
 
     @SuppressLint("MissingPermission")
     override fun setNetworkAutomatic(subId: Int): String {
+        if (Build.VERSION.SDK_INT < 28) return "自动选网需要 Android 9+"
         return try {
             tm(subId).setNetworkSelectionModeAutomatic()
             "已切换为自动选网"
@@ -142,32 +140,7 @@ class PrivilegedTelephonyService : IPrivilegedTelephony.Stub {
     }
 
     override fun lockPci(subId: Int, pci: Int, arfcn: Int, rat: String): String {
-        if (Os.getuid() != 0) {
-            return "PCI 锁定需要 Shizuku 以 Root 身份运行（当前 uid=${Os.getuid()}）。ADB 模式只能锁制式/Band/频点。"
-        }
-        val at = when {
-            rat.contains("NR", true) -> "AT+QNWLOCK=\"common/5g\",1,$pci,$arfcn"
-            rat.contains("LTE", true) || rat.contains("4G", true) ->
-                "AT+QNWLOCK=\"common/4g\",1,$pci,$arfcn"
-            else -> "AT+QNWLOCK=\"common/4g\",1,$pci,$arfcn"
-        }
-        val devices = listOf("/dev/smd11", "/dev/smd8", "/dev/smd7", "/dev/smd0")
-        val existing = devices.filter { File(it).exists() }
-        if (existing.isEmpty()) {
-            return "已处于 Root，但没找到调制解调器 AT 口（/dev/smd*）。这台机器可能不是高通，或节点路径不同。"
-        }
-        val errors = mutableListOf<String>()
-        existing.forEach { path ->
-            val ok = runCatching {
-                File(path).outputStream().use { out ->
-                    out.write("$at\r".toByteArray())
-                    out.flush()
-                }
-            }
-            if (ok.isSuccess) return "已向 $path 写入 $at"
-            errors += "${path}: ${ok.exceptionOrNull()?.message}"
-        }
-        return "PCI AT 指令失败: ${errors.joinToString()}"
+        return "此设备尚无经过验证的 PCI 锁定适配；Root 授权不能保证支持。未向调制解调器写入指令。"
     }
 
     private fun tm(subId: Int): TelephonyManager {
@@ -183,17 +156,6 @@ class PrivilegedTelephonyService : IPrivilegedTelephony.Stub {
     private fun currentApp(): Context {
         val thread = Class.forName("android.app.ActivityThread")
         return thread.getMethod("currentApplication").invoke(null) as Context
-    }
-
-    private fun preferredFromMask(types: Long): Int {
-        return when {
-            types and RatMask.NR != 0L && types and RatMask.LTE != 0L -> 33
-            types and RatMask.NR != 0L -> 32
-            types and RatMask.LTE != 0L -> 22
-            types and RatMask.WCDMA != 0L -> 20
-            types and RatMask.GSM != 0L -> 1
-            else -> 22
-        }
     }
 
     companion object {

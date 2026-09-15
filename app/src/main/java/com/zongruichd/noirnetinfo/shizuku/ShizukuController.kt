@@ -141,7 +141,15 @@ class ShizukuController(private val context: Context) {
             RatMask.LTE.takeIf { enableLte },
             RatMask.NR.takeIf { enableNr },
         ).fold(0L) { acc, v -> acc or v }
-        if (mask == 0L) return "至少选择一种制式"
+        if (mask == 0L) {
+            _state.update { it.copy(lastResult = "至少选择一种制式") }
+            return "至少选择一种制式"
+        }
+        if (pci != null) {
+            val result = "PCI 锁定尚无设备适配，未应用任何锁定"
+            _state.update { it.copy(lastResult = result) }
+            return result
+        }
         val messages = mutableListOf<String>()
         runCatching { svc.setAllowedNetworkTypes(subId, mask) }
             .onSuccess { messages += it }
@@ -150,20 +158,24 @@ class ShizukuController(private val context: Context) {
         val rans = mutableListOf<Int>()
         val counts = mutableListOf<Int>()
         val bands = mutableListOf<Int>()
-        if (enableLte && lteBands.isNotEmpty()) {
+        if (enableLte) {
             rans += AccessNetworkConstants.AccessNetworkType.EUTRAN
             counts += lteBands.size
             bands += lteBands
         }
-        if (enableNr && nrBands.isNotEmpty()) {
+        if (enableNr) {
             rans += AccessNetworkConstants.AccessNetworkType.NGRAN
             counts += nrBands.size
             bands += nrBands
         }
-        if (enableWcdma && wcdmaBands.isNotEmpty()) {
+        if (enableWcdma) {
             rans += AccessNetworkConstants.AccessNetworkType.UTRAN
             counts += wcdmaBands.size
             bands += wcdmaBands
+        }
+        if (enableGsm) {
+            rans += AccessNetworkConstants.AccessNetworkType.GERAN
+            counts += 0
         }
         val channelRan = when {
             arfcn == null -> 0
@@ -172,7 +184,11 @@ class ShizukuController(private val context: Context) {
             else -> AccessNetworkConstants.AccessNetworkType.EUTRAN
         }
         if (rans.isNotEmpty() || arfcn != null) {
-            val useRans = if (rans.isNotEmpty()) rans else listOf(channelRan)
+            if (arfcn != null && channelRan !in rans) {
+                rans += channelRan
+                counts += 0
+            }
+            val useRans = rans
             val useCounts = if (rans.isNotEmpty()) counts else listOf(0)
             val useBands = if (rans.isNotEmpty()) bands else emptyList()
             runCatching {
@@ -185,13 +201,6 @@ class ShizukuController(private val context: Context) {
                     arfcn?.let { intArrayOf(it) } ?: intArrayOf(),
                 )
             }.onSuccess { messages += it }.onFailure { messages += "Band/频点: ${it.message}" }
-        }
-        if (pci != null && pci >= 0 && arfcn != null) {
-            runCatching { svc.lockPci(subId, pci, arfcn, servingRat.orEmpty()) }
-                .onSuccess { messages += it }
-                .onFailure { messages += "PCI: ${it.message}" }
-        } else if (pci != null) {
-            messages += "PCI 锁定需要同时填写频点"
         }
         val result = messages.joinToString("\n")
         _state.update { it.copy(lastResult = result) }

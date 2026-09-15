@@ -103,7 +103,7 @@ fun ExpandableBlock(
     initiallyExpanded: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    var expanded by rememberSaveable(title, subtitle) { mutableStateOf(initiallyExpanded) }
+    var expanded by rememberSaveable(title) { mutableStateOf(initiallyExpanded) }
     Column(Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
@@ -152,13 +152,13 @@ fun CopyableRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = 16.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
-        verticalAlignment = Alignment.Top,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             label,
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(108.dp).padding(top = 2.dp),
+            modifier = Modifier.fillMaxWidth(0.28f).padding(top = 2.dp),
         )
         Text(
             text = display,
@@ -170,13 +170,13 @@ fun CopyableRow(
                 MaterialTheme.colorScheme.onSurface
             },
             modifier = Modifier.weight(1f).padding(end = 4.dp, top = 1.dp),
-            maxLines = 3,
+            maxLines = Int.MAX_VALUE,
             overflow = TextOverflow.Ellipsis,
         )
         if (value != null) {
             IconButton(
                 onClick = { onCopy(value) },
-                modifier = Modifier.size(32.dp),
+                modifier = Modifier.size(48.dp),
             ) {
                 Icon(
                     Icons.Outlined.ContentCopy,
@@ -186,7 +186,7 @@ fun CopyableRow(
                 )
             }
         } else {
-            Spacer(Modifier.size(32.dp))
+            Spacer(Modifier.size(48.dp))
         }
     }
     if (showDivider) {

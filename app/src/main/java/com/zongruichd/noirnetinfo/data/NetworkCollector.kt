@@ -20,8 +20,7 @@ object NetworkCollector {
 
     fun collect(context: Context): NetworkSnapshot {
         val app = context.applicationContext
-        val locationGranted = has(app, Manifest.permission.ACCESS_FINE_LOCATION) ||
-            has(app, Manifest.permission.ACCESS_COARSE_LOCATION)
+        val locationGranted = has(app, Manifest.permission.ACCESS_FINE_LOCATION)
         val phoneGranted = has(app, Manifest.permission.READ_PHONE_STATE)
 
         val cm = app.getSystemService(ConnectivityManager::class.java)
@@ -49,6 +48,7 @@ object NetworkCollector {
             interfaces = interfaces,
             locationGranted = locationGranted,
             phoneGranted = phoneGranted,
+            locationEnabled = androidx.core.location.LocationManagerCompat.isLocationEnabled(app.getSystemService(android.location.LocationManager::class.java)),
         )
     }
 
@@ -95,9 +95,9 @@ object NetworkCollector {
             validated = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true,
             captivePortal = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) == true,
             vpn = vpn,
-            metered = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) != true,
+            metered = caps != null && !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED),
             interfaceName = lp?.interfaceName,
-            mtu = lp?.mtu?.takeIf { it > 0 },
+            mtu = if (Build.VERSION.SDK_INT >= 29) lp?.mtu?.takeIf { it > 0 } else null,
             dns = lp?.dnsServers.orEmpty().mapNotNull { it.hostAddress },
             domains = lp?.domains?.takeIf { it.isNotBlank() },
             dhcpServer = dhcp,
@@ -116,11 +116,11 @@ object NetworkCollector {
         } else {
             null
         }
-        val info = fromCaps ?: run {
+        val info = fromCaps?.takeIf { it.ssid != "<unknown ssid>" && it.bssid != "02:00:00:00:00:00" } ?: run {
             val wm = context.applicationContext.getSystemService(WifiManager::class.java)
                 ?: return null
             @Suppress("DEPRECATION")
-            wm.connectionInfo
+            runCatching { wm.connectionInfo }.getOrNull() ?: fromCaps
         } ?: return null
 
         if (info.networkId == -1 && fromCaps == null && info.ssid.isNullOrBlank()) {
@@ -141,7 +141,7 @@ object NetworkCollector {
             ssid = ssid,
             bssid = bssid,
             rssiDbm = info.rssi.takeIf { it in -126..-1 },
-            linkSpeedMbps = info.linkSpeed.takeIf { it > 0 },
+            linkSpeedMbps = if (Build.VERSION.SDK_INT >= 29) info.rxLinkSpeedMbps.takeIf { it > 0 } else null,
             txLinkSpeedMbps = if (Build.VERSION.SDK_INT >= 29) {
                 info.txLinkSpeedMbps.takeIf { it > 0 }
             } else {
@@ -151,7 +151,7 @@ object NetworkCollector {
             standard = wifiStandard(info),
             security = securityType(info),
             hiddenSsid = info.hiddenSSID,
-            needsLocation = unknown && !locationGranted,
+            needsLocation = unknown,
         )
     }
 
@@ -245,7 +245,7 @@ object NetworkCollector {
                             )
                         }
                 }
-                .filter { extra -> fromLink.none { it.hostAddress.substringBefore('%') == extra.hostAddress.substringBefore('%') } }
+                .filter { extra -> fromLink.none { it.iface == extra.iface && it.hostAddress.substringBefore('%') == extra.hostAddress.substringBefore('%') } }
                 .toList()
             return (fromLink + extras).distinctBy { it.cidr + it.iface }
         }
@@ -283,30 +283,6 @@ object NetworkCollector {
         }
     }
 
-    private fun scopeOf(host: String, version: IpVersion): IpScope {
-        val lower = host.lowercase()
-        return when (version) {
-            IpVersion.V4 -> {
-                val p = lower.split('.')
-                val a = p.getOrNull(0)?.toIntOrNull()
-                val b = p.getOrNull(1)?.toIntOrNull()
-                when {
-                    a == 127 -> IpScope.LOOPBACK
-                    a == 10 -> IpScope.PRIVATE
-                    a == 192 && b == 168 -> IpScope.PRIVATE
-                    a == 172 && b in 16..31 -> IpScope.PRIVATE
-                    a == 169 && b == 254 -> IpScope.LINK_LOCAL
-                    else -> IpScope.GLOBAL
-                }
-            }
-            IpVersion.V6 -> when {
-                lower == "::1" -> IpScope.LOOPBACK
-                lower.startsWith("fe80") -> IpScope.LINK_LOCAL
-                lower.startsWith("fc") || lower.startsWith("fd") -> IpScope.ULA
-                lower.startsWith("ff") -> IpScope.OTHER
-                else -> IpScope.GLOBAL
-            }
-        }
-    }
+    private fun scopeOf(host: String, version: IpVersion): IpScope = classifyIp(host)
 
 }

@@ -32,7 +32,7 @@ import com.zongruichd.noirnetinfo.ui.util.label
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun CellularOverviewPage(snapshot: NetworkSnapshot, onCopy: (String) -> Unit) {
+fun CellularOverviewPage(snapshot: NetworkSnapshot, onCopy: (String) -> Unit, onOpenSim: (Int) -> Unit) {
     val cell = snapshot.cellular
     SectionCard(title = "蜂窝总览", icon = Icons.Outlined.CellTower) {
         if (cell == null) {
@@ -66,8 +66,9 @@ fun CellularOverviewPage(snapshot: NetworkSnapshot, onCopy: (String) -> Unit) {
                 serving?.rsrp?.let { "$it dBm" },
             ).joinToString(" · ").ifBlank { null },
             collapsible = true,
-            initiallyExpanded = snapshot.slots.size == 1,
+            initiallyExpanded = true,
         ) {
+            TextButton(onClick = { onOpenSim(slot.subscriptionId) }, modifier = Modifier.padding(horizontal = 8.dp)) { Text("查看服务小区与邻区") }
             CopyableRow("代际", slot.operator.generation, onCopy, mono = false)
             CopyableRow("注册", slot.operator.serviceState, onCopy, mono = false)
             CopyableRow("主小区", serving?.headline(), onCopy, mono = false)
@@ -97,9 +98,16 @@ fun SimDetailPage(
             slot.operator.displayOverride?.let { AssistChip(onClick = {}, label = { Text(it) }) }
             if (slot.operator.carrierAggregation == true) AssistChip(onClick = {}, label = { Text("CA") })
         }
-        SignalMeter("RSRP / SS-RSRP", serving?.rsrp, "dBm", -140..-44)
-        SignalMeter("RSRQ / SS-RSRQ", serving?.rsrq, "dB", -20..-3)
-        SignalMeter("SINR / SS-SINR", serving?.sinr, "dB", -20..30)
+        CopyableRow("测量时间", serving?.measuredAtMillis?.let {
+            "系统缓存 · ${com.zongruichd.noirnetinfo.ui.util.formatTime(it)}"
+        }, onCopy, mono = false)
+        if (serving?.rat == "LTE" || serving?.rat == "NR 5G") {
+            SignalMeter("RSRP / SS-RSRP", serving.rsrp, "dBm", -140..-44)
+            SignalMeter("RSRQ / SS-RSRQ", serving.rsrq, "dB", -43..20)
+            SignalMeter("SINR / SS-SINR", serving.sinr, "dB", -23..40)
+        } else {
+            SignalMeter("接收信号", serving?.dbm, "dBm", -120..-40)
+        }
         CopyableRow("信号质量", rsrpQuality(serving?.rsrp), onCopy, mono = false)
         CopyableRow("电平", serving?.level?.let { "$it / 4" }, onCopy, mono = false, showDivider = false)
         TextButton(onClick = onOpenSettings, modifier = Modifier.padding(horizontal = 4.dp)) {

@@ -30,6 +30,7 @@ import kotlinx.coroutines.withContext
 data class HomeUiState(
     val snapshot: NetworkSnapshot? = null,
     val refreshing: Boolean = false,
+    val error: String? = null,
 )
 
 data class UpdateUiState(
@@ -69,37 +70,68 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             scheduleRefresh()
     }
 
+    private var foreground = false
+    private var pollJob: Job? = null
+    private var publicJob: Job? = null
+    private var publicNetwork: Network? = null
+
     init {
         runCatching { connectivityManager.registerDefaultNetworkCallback(networkCallback) }
-        refresh()
-        viewModelScope.launch {
-            while (isActive) {
-                delay(1500)
-                refreshCellular()
+    }
+
+    fun setForeground(active: Boolean) {
+        foreground = active
+        pollJob?.cancel()
+        if (active) {
+            refresh()
+            pollJob = viewModelScope.launch {
+                while (isActive) {
+                    delay(3000)
+                    if (refreshJob?.isActive != true) refresh(queryPublic = false)
+                }
             }
+        } else {
+            debounceJob?.cancel()
+            refreshJob?.cancel()
+            publicJob?.cancel()
         }
     }
 
-    fun refresh() {
+    fun refresh() = refresh(queryPublic = true)
+
+    private fun refresh(queryPublic: Boolean) {
         refreshJob?.cancel()
         refreshJob = viewModelScope.launch {
-            _state.update { it.copy(refreshing = true) }
-            shizukuController.refresh()
-            val local = withContext(Dispatchers.IO) {
-                NetworkCollector.collect(getApplication())
-            }
-            _state.update {
-                it.copy(
-                    snapshot = local.copy(
-                        publicIp = it.snapshot?.publicIp?.copy(loading = true)
-                            ?: local.publicIp.copy(loading = true),
-                    ),
-                    refreshing = false,
-                )
-            }
-            val publicIp = withContext(Dispatchers.IO) { PublicIpClient.fetch() }
-            _state.update { current ->
-                current.copy(snapshot = current.snapshot?.copy(publicIp = publicIp))
+            _state.update { it.copy(refreshing = queryPublic, error = null) }
+            try {
+                shizukuController.refresh()
+                val network = connectivityManager.activeNetwork
+                val local = withContext(Dispatchers.IO) { NetworkCollector.collect(getApplication()) }
+                val changed = network != publicNetwork
+                val fetchPublic = queryPublic || changed
+                if (fetchPublic) {
+                    publicJob?.cancel()
+                    publicNetwork = network
+                }
+                _state.update {
+                    it.copy(snapshot = local.copy(publicIp = when {
+                        network == null -> com.zongruichd.noirnetinfo.data.PublicIpInfo(error = "无活动网络")
+                        fetchPublic -> com.zongruichd.noirnetinfo.data.PublicIpInfo(loading = true)
+                        else -> it.snapshot?.publicIp ?: local.publicIp
+                    }), refreshing = false)
+                }
+                if (fetchPublic && network != null) {
+                    publicJob = viewModelScope.launch {
+                        val publicIp = withContext(Dispatchers.IO) { PublicIpClient.fetch() }
+                        if (connectivityManager.activeNetwork == network) {
+                            _state.update { it.copy(snapshot = it.snapshot?.copy(publicIp = publicIp)) }
+                        }
+                    }
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _state.update { it.copy(refreshing = false, error = "读取失败：${error.message}") }
             }
         }
     }
@@ -136,6 +168,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun checkUpdate() {
+        if (_update.value.checking || _update.value.downloading) return
         viewModelScope.launch {
             _update.update { it.copy(checking = true, message = null) }
             runCatching {
@@ -166,6 +199,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun downloadUpdate() {
+        if (_update.value.downloading) return
         val url = _update.value.apkUrl ?: return
         viewModelScope.launch {
             _update.update { it.copy(downloading = true, progress = 0f, message = "正在下载…") }
@@ -196,29 +230,14 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _update.update { it.copy(installUri = null) }
     }
 
-    private suspend fun refreshCellular() {
-        val current = _state.value.snapshot ?: return
-        val app = getApplication<Application>()
-        val (cellular, slots) = withContext(Dispatchers.IO) {
-            CellularCollector.collect(app, current.phoneGranted, current.locationGranted)
-        }
-        _state.update { state ->
-            val snap = state.snapshot ?: return@update state
-            state.copy(
-                snapshot = snap.copy(
-                    cellular = cellular,
-                    slots = slots,
-                    collectedAtMillis = System.currentTimeMillis(),
-                ),
-            )
-        }
-    }
-
     private fun scheduleRefresh() {
-        debounceJob?.cancel()
-        debounceJob = viewModelScope.launch {
-            delay(400)
-            refresh()
+        viewModelScope.launch {
+            if (!foreground) return@launch
+            debounceJob?.cancel()
+            debounceJob = viewModelScope.launch {
+                delay(400)
+                refresh(queryPublic = false)
+            }
         }
     }
 

@@ -11,6 +11,7 @@ data class NetworkSnapshot(
     val publicIp: PublicIpInfo = PublicIpInfo(),
     val locationGranted: Boolean,
     val phoneGranted: Boolean,
+    val locationEnabled: Boolean = true,
 )
 
 data class ConnectivityInfo(
@@ -42,6 +43,7 @@ enum class IpScope {
     LOOPBACK,
     LINK_LOCAL,
     PRIVATE,
+    SHARED,
     ULA,
     GLOBAL,
     OTHER,
@@ -126,6 +128,7 @@ data class OperatorInfo(
 )
 
 data class CellRecord(
+    val measuredAtMillis: Long? = null,
     val rat: String,
     val registered: Boolean,
     val connectionStatus: CellRole,

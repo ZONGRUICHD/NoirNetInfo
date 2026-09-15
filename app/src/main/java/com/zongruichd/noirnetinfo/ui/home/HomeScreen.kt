@@ -2,6 +2,14 @@ package com.zongruichd.noirnetinfo.ui.home
 
 import android.Manifest
 import android.os.Build
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.key
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -94,6 +102,19 @@ private const val DEST_SETTINGS = "settings"
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(vm: HomeViewModel = viewModel()) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, vm) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) vm.setForeground(true)
+            if (event == Lifecycle.Event.ON_STOP) vm.setForeground(false)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) vm.setForeground(true)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            vm.setForeground(false)
+        }
+    }
     val state by vm.state.collectAsState()
     val shizuku by vm.shizuku.collectAsState()
     val update by vm.update.collectAsState()
@@ -113,6 +134,12 @@ fun HomeScreen(vm: HomeViewModel = viewModel()) {
         scope.launch { snackbar.showSnackbar("已复制") }
     }
 
+    BackHandler(enabled = !drawerState.isOpen && dest != DEST_OVERVIEW) {
+        dest = if (dest == DEST_SIM) DEST_CELL else DEST_OVERVIEW
+    }
+    val listState = rememberLazyListState()
+    LaunchedEffect(dest, simId) { listState.scrollToItem(0) }
+    LaunchedEffect(state.error) { state.error?.let { snackbar.showSnackbar(it) } }
     val snapshot = state.snapshot
     val selectedSim = snapshot?.slots?.firstOrNull { it.subscriptionId == simId }
     LaunchedEffect(snapshot?.slots, dest, simId) {
@@ -216,7 +243,7 @@ fun HomeScreen(vm: HomeViewModel = viewModel()) {
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text(title) },
+                    title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     navigationIcon = {
                         IconButton(onClick = { scope.launch { drawerState.open() } }) {
                             Icon(Icons.Outlined.Menu, contentDescription = "打开分类")
@@ -234,7 +261,7 @@ fun HomeScreen(vm: HomeViewModel = viewModel()) {
                         ) {
                             Icon(Icons.Outlined.ContentCopy, contentDescription = "复制全部")
                         }
-                        IconButton(onClick = vm::refresh) {
+                        IconButton(onClick = vm::refresh, enabled = !state.refreshing) {
                             Icon(Icons.Outlined.Refresh, contentDescription = "刷新")
                         }
                     },
@@ -253,6 +280,7 @@ fun HomeScreen(vm: HomeViewModel = viewModel()) {
                     .padding(padding),
             ) {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -269,7 +297,10 @@ fun HomeScreen(vm: HomeViewModel = viewModel()) {
                             )
                         }
                     }
-                    item {
+                    if (snapshot != null && !snapshot.locationEnabled && (dest == DEST_WIFI || dest == DEST_CELL || dest == DEST_SIM)) {
+                        item { Text("系统定位已关闭，Wi-Fi 名称和小区信息可能不可用。请在系统设置中开启定位。", modifier = Modifier.padding(12.dp)) }
+                    }
+                    item(key = "$dest/$simId") {
                         Column(
                             modifier = Modifier.fillMaxWidth(),
                             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -280,7 +311,7 @@ fun HomeScreen(vm: HomeViewModel = viewModel()) {
                                 DEST_PUBLIC -> snapshot?.let { PublicIpPage(it, ::onCopy) }
                                 DEST_IFACE -> snapshot?.let { InterfacePage(it, ::onCopy) }
                                 DEST_WIFI -> snapshot?.let { WifiPage(it, ::onCopy) }
-                                DEST_CELL -> snapshot?.let { CellularOverviewPage(it, ::onCopy) }
+                                DEST_CELL -> snapshot?.let { CellularOverviewPage(it, ::onCopy) { id -> simId = id; dest = DEST_SIM } }
                                 DEST_SIM -> selectedSim?.let { sim ->
                                     SimDetailPage(
                                         slot = sim,

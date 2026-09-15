@@ -88,6 +88,7 @@ object UpdateClient {
                     }
                 }
             }
+            if (total > 0 && dest.length() != total) error("下载不完整，请重试")
             if (dest.length() < 1024) error("下载的文件过小，可能不是 APK")
         } finally {
             connection.disconnect()

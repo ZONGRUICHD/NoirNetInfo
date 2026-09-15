@@ -6,9 +6,14 @@ import java.util.concurrent.TimeUnit
 
 object PublicIpClient {
     fun fetch(): PublicIpInfo {
-        val v4 = runCatching { get("https://api.ipify.org") }.getOrNull()
-        val v6raw = runCatching { get("https://api64.ipify.org") }.getOrNull()
-        val v6 = v6raw?.takeIf { it.contains(':') }
+        val v4 = runCatching { get("https://api.ipify.org") }.getOrNull()?.takeIf {
+            it.matches(Regex("[0-9.]+")) && it.split('.').let { parts ->
+                parts.size == 4 && parts.all { part -> part.toIntOrNull() in 0..255 }
+            }
+        }
+        val v6raw = runCatching { get("https://api6.ipify.org") }.getOrNull()
+        val v6 = v6raw?.takeIf { it.contains(':') && it.matches(Regex("[0-9a-fA-F:]+")) &&
+            runCatching { java.net.InetAddress.getByName(it) is java.net.Inet6Address }.getOrDefault(false) }
         val error = if (v4 == null && v6 == null) {
             "公网地址查询失败（可能无外网或被拦截）"
         } else {
